@@ -2,6 +2,8 @@
 
 My participation for [Hello World Open 2014](https://helloworldopen.com/). 
 
+** Actual code not added yet as the competition is still going on.**
+
 ## Why?
 I decided to join the competition using [Ruby](https://www.ruby-lang.org/en/) because I had absolutely no experience with it before this. This way I'd get at least something (besides entertainment) out of it, since I wasn't really confident about winning.
 
