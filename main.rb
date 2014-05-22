@@ -164,6 +164,7 @@ class NoobBot
     if exit_after then exit end
   end
 
+  # Brake if car angle is too big
   def esp(speed, car_angle)
     factors = {'0.1' => 65, '0.2' => 75, '0.3' => 85}
     if car_angle.abs >= 25
@@ -173,6 +174,7 @@ class NoobBot
     end
   end
 
+  # Check if we are on the finish line
   def on_finish_line(lap, piece_idx)
     if @lap_count
       return lap == @lap_count - 1 && piece_idx >= @finish_line
@@ -181,19 +183,28 @@ class NoobBot
     end
   end
 
+  # Check if we are in a first corner of the race
   def not_first_corner(lap, piece_idx)
-    return (lap == 0 && piece_idx > @start_line) || (lap > 0)
+    return (lap == 0 && piece_idx > @start_line) || lap > 0
   end
 
+  # Are two vars same sign
   def same_sign(a, b)
     return a.to_i^b.to_i >= 0
   end
 
+  # Calculate game friction, super scientific way!
   def get_friction(start_pos, stop_pos)
+    # 10 gameticks
     duration = 10 * (1.0/60.0)
+
+    # These probably make no sense
     velocity = (stop_pos - start_pos) / duration
     acceleration = velocity/duration
     friction = ((velocity**2)/(9.8*50))/10
+
+    # Allow only frictions under 0.4 :)
+    # Again, super scientific
     if friction.round(1) >= 0.4
       if friction.round(1) >= 0.7
         friction -= 0.6
@@ -209,6 +220,7 @@ class NoobBot
     puts "#{friction.round(3)}"
   end
 
+  # Calculate speed for each gametick
   def get_speed(piece_idx, car_angle, lap, gameTick)
     speed = 1.0
 
@@ -235,8 +247,6 @@ class NoobBot
       else
         if p['angle'].abs <= 22.5
           straight += 1
-        else
-          break
         end
       end
     end
@@ -246,14 +256,18 @@ class NoobBot
     j = 0
     for i in 1..3
       if @track[piece_idx + i]
+        # If next piece exists, use it
         p_next << @track[piece_idx + i]
       else
+        # No next piece so this must be the end of track, take piece from start
         p_next << @track[j]
         j += 1
       end
     end
 
     # Static brakes for each kind of curve
+    # Hard-coded brake values for kind of curve
+    # Not working that great
     if !@friction
       brakes = {
         50 => {
@@ -291,10 +305,15 @@ class NoobBot
     end
 
     brake_counts = {}
+    # Check next pieces
     p_next.each_with_index do |p,i|
+      # Next piece has curve so we need brakes
       if p.has_key?('angle')
+        # Check if we have already used brake for this kinda curve
         brake_counts[p['angle'].abs] = !brake_counts[p['angle'].abs] ? 1.0 : brake_counts[p['angle'].abs] += 1.0
         if brake_counts[p['angle'].abs] > 1
+          # Brake for this kind of curve has been used, use only 2/3 of brake force
+          # since we probably don't need full brake anymore
           speed -= (brakes[p['radius']][p['angle'].abs] / 3.0) * 2.0
         else
           speed -= brakes[p['radius']][p['angle'].abs]
@@ -302,6 +321,8 @@ class NoobBot
       end
     end
 
+    # If in a long straight, not in a first corner and with enough speed, brake before curve
+    # Dirty solution for crashing in curves after long straights
     if straight >= 3 && not_first_corner(lap, piece_idx) && speed.round(2) < (1 - 3*brakes[200][22.5])
       for i in 0..1 do
         if p_next[i].has_key?('angle')
@@ -311,26 +332,14 @@ class NoobBot
       end
     end
 
-    # if @friction && @friction < 0.15
-      if p_current.has_key?('angle') && @friction
-        vmax = Math.sqrt(9.8*p_current['radius']*@friction) * 0.04
-        if speed > vmax
-          speed = vmax
-        end
-      elsif p_next[0].has_key?('angle') && @friction
-        vmax = Math.sqrt(9.8*p_next[0]['radius']*@friction) * 0.04
-        if speed > vmax
-          speed = vmax
-        end
-      end
-    # end
-
-
+    # If we are on finish line, always max speed since no way of crashing anymore
     if on_finish_line(lap, piece_idx) then return 1.0 else return speed end
   end
 
+  # Decide whether we should switch lanes and if so, where
   def switch_lane(data, gameTick)
     lane = data[:lane]
+
     # Get n next pieces
     p_next = []
     j = 0
@@ -343,14 +352,17 @@ class NoobBot
       end
     end
 
+    # No switch in the next piece
     if !p_next[0].has_key?('switch')
       return false
     end
 
+    # If switch decision has already been made
     if @switch[data[:piece_idx]]
       return false
     end
 
+    # Calculate total sum of angles for next pieces
     angle_sum = 0.0
     p_next.each do |p|
       if p.has_key?('angle')
@@ -358,6 +370,7 @@ class NoobBot
       end
     end
 
+    # Angle sum > 0 means curve(s) bend to right. Always switch to inner curve
     if angle_sum > 0
       lane_switch = 'Right'
       data[:target_lane] = lane - 1
@@ -366,14 +379,19 @@ class NoobBot
       data[:target_lane] = lane + 1
     end
 
-    if lane_blocked(data, gameTick) && ((lane_switch == 'Left' && lane > 0) || (lane_switch == 'Right' && lane < @lane_count -1))
+    # Check if current lane is blocked
+    if lane_blocked(data, gameTick)
+      # Switch current switch dir
       lane_switch = (lane_switch == 'Left') ? 'Right' : 'Left'
     else
+      # Do not switch if we are currently blocking someone :)
       if blocking(data, gameTick)
         return false
       end
     end
 
+    # Check that lane switch can actually be executed, eg. we are not switching to left in the leftmost lane.
+    # This does not work well if lanes > 2
     if (lane_switch == 'Left' && lane == 0) || (lane_switch == 'Right' && lane == @lane_count -1)
       return false
     end
@@ -382,17 +400,21 @@ class NoobBot
     return lane_switch
   end
 
+  # Check if we are blocked by someone
   def lane_blocked(data, gameTick)
     ahead_count = 0
     data[:car_positions].each do |p|
+      # No need to process our car
       if p['id']['color'] == data[:car]
         next
       end
 
+      # If player is not in both, our current and our target lane, no need to process further
       if p['piecePosition']['lane']['startLaneIndex'] != data[:lane] && p['piecePosition']['lane']['startLaneIndex'] != data[:target_lane]
         next
       end
 
+      # Do not process if player is not in our lap
       if p['piecePosition']['lap'] != data[:lap]
         next
       end
@@ -402,6 +424,7 @@ class NoobBot
         next
       end
 
+      # Check if there is someone ahead of us
       if p['piecePosition']['pieceIndex'] > data[:piece_idx]
         ahead_count += 1
       elsif p['piecePosition']['pieceIndex'] == data[:piece_idx] && p['piecePosition']['inPieceDistance'] > data[:in_piece_dist]
@@ -412,7 +435,8 @@ class NoobBot
     return ahead_count > 0
   end
 
- def blocking(data, gameTick)
+  # Check if we are currently blocking someone
+  def blocking(data, gameTick)
     behind_count = 0
     data[:car_positions].each do |p|
       if p['id']['color'] == data[:car]
@@ -432,6 +456,7 @@ class NoobBot
         next
       end
 
+      # Check how many cars are behind us
       if p['piecePosition']['pieceIndex'] < data[:piece_idx]
         behind_count += 1
       elsif p['piecePosition']['pieceIndex'] == data[:piece_idx] && p['piecePosition']['inPieceDistance'] < data[:in_piece_dist]
@@ -446,16 +471,6 @@ class NoobBot
   def join_message(bot_name, bot_key)
     make_msg("join", {:name => bot_name, :key => bot_key})
   end
-
-  def join_message_2(bot_name, bot_key)
-    make_msg("joinRace", {:botId => {:name => bot_name, :key => bot_key}, :trackName => "england", :carCount => 1, :password => 'samasana'})
-  end
-
-  #
-  def join_message_join(bot_name, bot_key)
-    make_msg("joinRace", {:botId => {:name => bot_name, :key => bot_key}, :trackName => "keimola", :carCount => 8, :password => 'bar'})
-  end
-  #
 
   def throttle_message(throttle, gameTick)
     make_msg("throttle", throttle, gameTick)
